@@ -4,6 +4,7 @@ package badger
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,8 @@ type Badger struct {
 	*badger.DB
 	stale  time.Duration
 	logger core.Logger
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 var (
@@ -90,10 +93,35 @@ func Factory(badgerConfiguration core.CacheProvider, logger core.Logger, stale t
 		logger.Error("Impossible to open the Badger DB.", e)
 	}
 
-	i := &Badger{DB: db, logger: logger, stale: stale}
+	ctx, cancel := context.WithCancel(context.Background())
+	i := &Badger{DB: db, logger: logger, stale: stale, ctx: ctx, cancel: cancel}
 	enabledBadgerInstances.Store(uid, i)
+	go i.runGC()
 
 	return i, nil
+}
+
+func (s *Badger) runGC() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.garbageCollect()
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *Badger) garbageCollect() {
+	//again:
+	//err := s.DB.RunValueLogGC(0.7)
+	s.DB.RunValueLogGC(0.7)
+	//	if err == nil {
+	//		goto again // Keep collecting until no more garbage
+	//	}
 }
 
 // Name returns the storer name.
